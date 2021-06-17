@@ -60,7 +60,7 @@ function Player:update(dt)
     -- self:checkBoundaries()
     self:applyGravity(dt)
     if self.grounded then
-        self:appyFriction(dt)
+        self:applyFriction(dt)
     end
     self:move(dt)
 end

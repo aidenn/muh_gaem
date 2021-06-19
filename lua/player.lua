@@ -1,10 +1,12 @@
-local map_01 = require "maps.map_01"
-Player = {}
+local bullet = require("lua/bullet")
+local player = {}
 
-function Player:load()
+function player:load()
     self.x = 50
     self.y = 50
-    self.width = 12
+    self.startX = self.x
+    self.startY = self.y
+    self.width = 8
     self.height = 16
     self.xVel = 0
     self.yVel = 0
@@ -17,34 +19,39 @@ function Player:load()
     self.graceDuration = 0.05
     self.jumpAmount = -350
     self.secondJump = false
-    self.scaleX = 1 -- direction (right)
+    self.scaleX = 1 -- direction (1: right, -1: left)
     self.state = "idle"
+    self.airMod = 8 -- dampen direction change in air
+    self.points = 0
+    self.health = {current = 3, total = 3}
+    self.alive = true
 
     self:loadAssets()
 
     self.physics = {}
     self.physics.body = love.physics.newBody(World, self.x, self.y, "dynamic")
     self.physics.body:setFixedRotation(true)
+    self.physics.body:setGravityScale(0)
     self.physics.shape = love.physics.newRectangleShape(self.width, self.height)
     self.physics.fixture = love.physics.newFixture(self.physics.body, self.physics.shape)
 end
 
-function Player:loadAssets()
+function player:loadAssets()
     self.animation = {timer = 0, rate = 0.1}
     self.animation.idle = {total = 2, current = 1, img = {}}
     self.animation.run  = {total = 2, current = 1, img = {}}
     self.animation.jump  = {total = 1, current = 1, img = {}}
 
     for i = 1, self.animation.idle.total do
-        self.animation.idle.img[i] = love.graphics.newImage("assets/player_idle_"..i..".png")
+        self.animation.idle.img[i] = love.graphics.newImage("assets/images/player_idle_"..i..".png")
     end
 
     for i = 1, self.animation.run.total do
-        self.animation.run.img[i] = love.graphics.newImage("assets/player_run_"..i..".png")
+        self.animation.run.img[i] = love.graphics.newImage("assets/images/player_run_"..i..".png")
     end
 
     for i = 1, self.animation.jump.total do
-        self.animation.jump.img[i] = love.graphics.newImage("assets/player_jump_"..i..".png")
+        self.animation.jump.img[i] = love.graphics.newImage("assets/images/player_jump_"..i..".png")
     end
 
     self.animation.draw = self.animation.idle.img[1]
@@ -52,28 +59,23 @@ function Player:loadAssets()
     self.animation.height = self.animation.draw:getHeight()
 end
 
-function Player:update(dt)
+function player:update(dt)
+    if self.health.current <= 0 then
+        self:die()
+    end
     self:setState()
     self:animate(dt)
     self:decreaseGraceTime(dt)
     self:syncPhysics()
-    -- self:checkBoundaries()
     self:applyGravity(dt)
     if self.grounded then
         self:applyFriction(dt)
     end
     self:move(dt)
+    self:pewPew(dt)
 end
 
-function Player:animate(dt)
-    self.animation.timer = self.animation.timer + dt
-    if self.animation.timer > self.animation.rate then
-        self.animation.timer = 0
-        self:setNewFrame()
-    end
-end
-
-function Player:setState()
+function player:setState()
     if not self.grounded then
         self.state = "jump"
     elseif self.xVel == 0 then
@@ -83,7 +85,15 @@ function Player:setState()
     end
 end
 
-function Player:setNewFrame()
+function player:animate(dt)
+    self.animation.timer = self.animation.timer + dt
+    if self.animation.timer > self.animation.rate then
+        self.animation.timer = 0
+        self:setNewFrame()
+    end
+end
+
+function player:setNewFrame()
     local anim = self.animation[self.state]
     if anim.current < anim.total then
         anim.current = anim.current + 1
@@ -93,105 +103,84 @@ function Player:setNewFrame()
     self.animation.draw = anim.img[anim.current]
 end
 
-function Player:syncPhysics()
+function player:decreaseGraceTime(dt)
+    if not self.grounded then
+        self.graceTime = self.graceTime - dt
+    end
+end
+
+function player:syncPhysics()
     self.x, self.y = self.physics.body:getPosition()
     self.physics.body:setLinearVelocity(self.xVel, self.yVel)
 end
 
-function Player:move(dt)
+function player:applyGravity(dt)
+    if not self.grounded then
+        self.yVel = self.yVel + self.gravity * dt
+    end
+end
+
+function player:applyFriction(dt)
+    if self.xVel < 0 then
+        self.xVel = math.min(self.xVel + self.friction * dt, 0)
+    elseif self.xVel > 0 then
+        self.xVel = math.max(self.xVel - self.friction * dt, 0)
+    end
+end
+
+function player:move(dt)
+    local am = 1
+    if not self.grounded then
+        am = self.airMod
+    end
     if love.keyboard.isDown("a", "left") then
         self.scaleX = -1
-        if self.xVel > -self.maxSpeed then
-            if self.xVel - self.acceleration * dt > -self.maxSpeed then
-                if self.grounded then
-                    self.xVel = self.xVel - self.acceleration * dt
-                else
-                    self.xVel = self.xVel - self.acceleration/8 * dt
-                end
-            else
-                self.xVel = -self.maxSpeed
-            end
-        end
+        self.xVel = math.max(self.xVel - self.acceleration/am * dt, -self.maxSpeed)
     elseif love.keyboard.isDown("d", "right") then
         self.scaleX = 1
-        if self.xVel < self.maxSpeed then
-            if self.xVel + self.acceleration * dt < self.maxSpeed then
-                if self.grounded then
-                    self.xVel = self.xVel + self.acceleration * dt
-                else
-                    self.xVel = self.xVel + self.acceleration/8 * dt
-                end
-            else
-                self.xVel = self.maxSpeed
-            end
+        self.xVel = math.min(self.xVel + self.acceleration/am * dt, self.maxSpeed)
+    end
+end
+
+function player:pewPew(dt)
+    if love.keyboard.isDown("j", "space") then
+        if bullet:canShoot(dt) then
+            bullet:new(self.x + 10 * self.scaleX, self.y + 4, self.scaleX, math.abs(self.xVel))
         end
     end
 end
 
-function Player:jump(key)
+function player:jump(key)
     if (key == "w" or key == "up") then
         if self.grounded or self.graceTime > 0 then
             self.yVel = self.jumpAmount
             self.graceTime = 0
         elseif self.secondJump then
             self.secondJump = false
-            self.yVel = self.jumpAmount * 0.75
+            self.yVel = self.jumpAmount * 0.85
         end
     end
 end
 
-function Player:decreaseGraceTime(dt)
-    if not self.grounded then
-        self.graceTime = self.graceTime - dt
-    end
-end
-
-function Player:applyGravity(dt)
-    if not self.grounded then
-        self.yVel = self.yVel + self.gravity * dt
-    end
-end
-
-function Player:applyFriction(dt)
-    if self.xVel < 0 then
-        if self.xVel + self.friction * dt < 0 then
-            self.xVel = self.xVel + self.friction * dt
-        else
-            self.xVel = 0
-        end
-    elseif self.xVel > 0 then
-        if self.xVel - self.friction * dt > 0 then
-            self.xVel = self.xVel - self.friction * dt
-        else
-            self.xVel = 0
-        end
-    end
-
-end
-
-function Player:checkBoundaries()
-    if self.x < 0 then
-        self.x = 0
-    elseif self.x + self.width > ScreenWidth/Scale then
-        self.x = ScreenWidth/Scale - self.width
-    end
-end
-
-function Player:beginContact(a, b, collision)
+function player:beginContact(a, b, collision)
     if self.grounded then return end
     local nx, ny = collision:getNormal()
     if a == self.physics.fixture then
         if ny > 0 then
             self:land(collision)
+        elseif ny < 0 then
+            self.yVel = 0
         end
     elseif b == self.physics.fixture then
         if ny < 0 then
             self:land(collision)
+        elseif ny > 0 then
+            self.yVel = 0
         end
     end
 end
 
-function Player:endContact(a, b, collision)
+function player:endContact(a, b, collision)
     if a == self.physics.fixture or b == self.physics.fixture then
         if self.currentGroundCollision == collision then
             self.grounded = false
@@ -199,7 +188,7 @@ function Player:endContact(a, b, collision)
     end
 end
 
-function Player:land(collision)
+function player:land(collision)
     self.currentGroundCollision = collision
     self.yVel = 0
     self.grounded = true
@@ -207,6 +196,33 @@ function Player:land(collision)
     self.graceTime = self.graceDuration
 end
 
-function Player:draw()
+function player:addPoints(number)
+    self.points = self.points + number
+end
+
+function player:takeDamage(amount)
+    self.health.current = math.max(0, self.health.current - amount)
+end
+
+function player:die()
+    self.alive = false
+    self:respawn()
+end
+
+function player:respawn()
+    self.alive = true
+    self:resetPosition()
+    self.health.current = self.health.total
+end
+
+function player:resetPosition()
+    self.physics.body:setPosition(self.startX, self.startY)
+    self.xVel = 0
+    self.yVel = 0
+end
+
+function player:draw()
     love.graphics.draw(self.animation.draw, self.x, self.y, 0, self.scaleX, 1, self.animation.width/2, self.animation.height/2)
 end
+
+return player
